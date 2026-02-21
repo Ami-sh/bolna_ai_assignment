@@ -1,82 +1,108 @@
-# Status Feed Poller
+# Status Feed Poller: OpenAI Service Monitor
 
 ## Overview
 
-This project is a Python-based status page monitor that polls RSS/Atom feeds (such as those used by OpenAI’s status pages) and streams updates in real time to the console. It is designed to scale to 100+ status pages. When new updates are detected, a summary is printed using **Rich-formatted Markdown panels**.
+This project is a high-performance, Python-based monitoring system designed to track service updates from the OpenAI Status Page and scale to 100+ similar status providers. Instead of simple manual refreshing, it utilizes a robust, asynchronous polling architecture that transforms RSS/Atom feeds into a real-time event stream.
 
-**Typical use cases:** Monitoring cloud service status pages, product incident feeds, and infrastructure alerts.
+Updates are pushed via **Server-Sent Events (SSE)** and displayed in the console using **Rich-formatted Markdown panels**, providing a clear, operator-friendly view of infrastructure health.
 
 ---
 
 ## Design Approach & Thought Process
 
-During design, several strategies were evaluated:
+The primary challenge was balancing the "event-based" requirement with the reality that most status pages do not support modern push protocols.
 
-* **Webhooks or Push:** Rejected because most status pages do not expose webhooks or support protocols like WebSub (PubSubHubbub) consistently.
-* **Email Alerts:** Rejected due to the complexity of automating inbox monitoring and reliability concerns. Also the fact that not all providers send email alerts for every update.
-* **Direct Polling (Chosen):** Universally compatible. To prevent system overload:
-* **Exponential Backoff:** Increases delay after unsuccessful attempts (1s, 2s, 4s, etc.).
-* **Jitter:** Adds randomness to delays to prevent "retry storms."
+### 1. Evolution of the Strategy
 
+* **Webhooks:** Initially considered, but rejected because status pages (including OpenAI’s) rarely allow users to register custom webhooks directly without third-party middleware.
+* **Email Triggers:** Thought of using emails as a trigger mechanism, but this lacks scalability. Not all providers offer email alerts, and automating an inbox adds unnecessary points of failure.
+* **RSS/Atom Feeds (The Winner):** I identified that almost every major status page (Atlassian Statuspage, AWS, Google, OpenAI) exposes an RSS or Atom feed. This is the most standardized way to track updates across 100+ providers.
 
-* **ETags/Last-Modified:** Considered for caching, but skipped in the initial version due to inconsistent server-side support; uses a **fetch-and-compare** strategy instead.
-* **FeedManager Singleton:** A central manager tracks all registered feeds and their state (last update timestamp) to ensure data consistency.
+### 2. Efficiency & Scaling
+
+To ensure the system is "event-like" and doesn't overwhelm providers:
+
+* **ETags & Last-Modified:** I researched using HTTP caching headers to avoid downloading the same content twice. Since support is inconsistent across providers, I implemented a **fetch-and-compare** logic based on the `updated` field within the feed entries.
+* **Smart Polling:** To prevent "retry storms" and stay within rate limits, I implemented **Exponential Backoff with Jitter**. The system increases wait times after unsuccessful attempts and adds random noise (jitter) to ensure that 100+ concurrent polls don't hit servers at the exact same millisecond.
 
 ---
 
 ## Architecture & Structure
 
-The project follows a layered separation of concerns:
+The project is built as a professional FastAPI application rather than a simple script, ensuring it can be managed via API and integrated into larger DevOps workflows.
+
+### Folder Structure
 
 ```text
 bolna_ai_assignment/
 ├── api/v1/                   # FastAPI routes (Health, Registration, SSE Streaming)
-├── config/                   # Timeouts and constants
-├── model/                    # Data classes and FeedManager singleton
-├── service/                  # Business logic (Polling, Parsing, Detection)
-├── main.py                   # FastAPI app & middleware configuration
-├── run.py                    # Entry point (Uvicorn launcher)
+│   ├── health_probes/        # Liveness/Readiness checks
+│   ├── rss_atom_feeds.py     # Feed management logic
+│   └── stream_console_out.py # SSE Log streaming
+├── config/                   # Global constants and polling intervals
+├── model/                    # Data models (Pydantic) and State Management
+├── service/                  # The "Brain" - FeedManager singleton & polling logic
+└── tests/                     # Unit tests
+├── main.py                   # FastAPI app initialization
+├── run.py                    # Uvicorn entry point
 └── requirements.txt          # dependencies (FastAPI, httpx, rich, etc.)
+
+
 
 ```
 
 ### Key Components
 
-* **SSE (Server-Sent Events):** Used in `stream_console_out.py` to provide a one-way real-time push of logs from the server to the client.
-* **Async Polling:** The service layer uses `httpx` and `asyncio` to fetch multiple feeds concurrently without blocking.
+* **FeedManager (Singleton):** A central service that manages the lifecycle of all feeds. It ensures that even if you have multiple API consumers, the polling state remains consistent and unique.
+* **SSE Streaming:** Instead of just printing to a local console, I exposed `/api/v1/stream-console/logs`. This allows you to view the "Console Output" from any terminal in the world by connecting to the server stream.
 
 ---
 
-## API Endpoints
+## API Endpoints & Usage
 
-### 1. Register a Feed
+The service provides a versioned REST API for dynamic control. Below are the key commands for both local and production (Railway) environments.
 
-`POST /api/v1/rssatom/register`
+### 1. Health Check
+
+Verify the service is up and running.
 
 ```bash
-curl -X POST "http://localhost:8000/api/v1/rssatom/register" \
-     -H "Content-Type: application/json" \
-     -d '{"url": "https://status.openai.com/atom.xml"}'
+curl --location 'http://localhost:8000/api/v1/health'
 
 ```
 
-### 2. Deregister a Feed
+### 2. Register a Feed
 
-`POST /api/v1/rssatom/deregister`
+Add a new status feed URL for monitoring.
 
 ```bash
-curl -X POST "http://localhost:8000/api/v1/rssatom/deregister" \
-     -H "Content-Type: application/json" \
-     -d '{"url": "https://status.openai.com/atom.xml"}'
+curl --location 'https://bolnaaiassignment-production.up.railway.app/api/v1/feeds/rssatom/register' \
+--header 'Content-Type: application/json' \
+--data '{
+        "url": "https://status.openai.com/feed.atom"
+      }'
 
 ```
 
-### 3. Stream Console Logs (SSE)
+### 3. Deregister a Feed
 
-`GET /api/v1/stream-console/logs`
+Stop monitoring a specific feed.
 
 ```bash
-curl -N "http://localhost:8000/api/v1/stream-console/logs"
+curl --location 'https://bolnaaiassignment-production.up.railway.app/api/v1/feeds/rssatom/deregister' \
+--header 'Content-Type: application/json' \
+--data '{
+        "url": "https://status.openai.com/feed.atom"
+      }'
+
+```
+
+### 4. Stream Logs (Real-time Output)
+
+Connect to the SSE stream to see updates as they happen.
+
+```bash
+curl --location 'https://bolnaaiassignment-production.up.railway.app/api/v1/stream-console/logs'
 
 ```
 
@@ -109,30 +135,28 @@ python run.py
 
 ---
 
-## Console Output
+## Console Output Example
 
-Updates are rendered using the **Rich** library. Example output:
+When an update is detected (e.g., from the OpenAI Atom feed), the SSE stream renders a formatted panel:
 
 ```text
 ╭──────────────────────── Status Update ────────────────────────╮
-│ **OpenAI Status Page:** Partial System Outage                 │
+│ OpenAI API: Chat Completions                                  │
 │                                                               │
-│ - **Title:** Service degradation in us-east-1               │
-│ - **Details:** Users may experience higher latency            │
-│ - **Time:** 2026-02-21T12:34:56Z                           │
+│ ● Status: Degraded performance due to upstream issue          │
+│ ● Updated: 2026-02-21 14:32:00                                │
 ╰───────────────────────────────────────────────────────────────╯
 
 ```
 
 ---
 
-## Improvements & Scope
+## Future Scope & Improvements
 
-* **Persistence:** Integrate SQLite or Redis to store feed state across restarts.
-* **Filtering:** Add rules to only alert on "Critical" or "Major" incident levels.
-* **Web Dashboard:** A frontend UI to manage feeds and view history visually.
-* **Scaling:** Implement worker pools for even larger scale (1000+ feeds).
+* **Persistence:** Currently, the `FeedManager` stores state in memory. Transitioning to **Redis or SQLite** would allow the system to remember the "last seen" update across restarts.
+* **Rate Limiting:** Implementing a Redis-based rate limiter to ensure the application doesn't get IP-banned when scaling to 1000+ feeds.
+* **Advanced Filtering:** Adding the ability to register feeds with specific keywords (e.g., "Only alert if 'API' is in the title").
 
 ---
 
-Would you like me to generate a `docker-compose.yml` file to help you containerize this setup?
+Would you like me to help you create a Python script to automate these CURL commands for multiple feed providers?
