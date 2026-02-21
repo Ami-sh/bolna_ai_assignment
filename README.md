@@ -158,5 +158,3 @@ When an update is detected (e.g., from the OpenAI Atom feed), the SSE stream ren
 * **Advanced Filtering:** Adding the ability to register feeds with specific keywords (e.g., "Only alert if 'API' is in the title").
 
 ---
-
-Would you like me to help you create a Python script to automate these CURL commands for multiple feed providers?
