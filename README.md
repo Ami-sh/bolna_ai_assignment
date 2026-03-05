@@ -1,4 +1,4 @@
-> **Note:** After being given the assignment and investing significant time and effort to complete it, I was ghosted (1 submission email, 2 follow-ups, LinkedIn message, etc.) and eventually received only a generic rejection. Hosting has been removed. Please install dependencies from `requirements.txt` and run `run.py`.
+> #**Note:** After being given the assignment and investing significant time and effort to complete it, I was ghosted (1 submission email, 2 follow-ups, LinkedIn message, etc.) and eventually received only a generic rejection. Hosting has been removed. Please install dependencies from `requirements.txt` and run `run.py`.
 
 
 # Status Feed Poller: OpenAI Service Monitor
